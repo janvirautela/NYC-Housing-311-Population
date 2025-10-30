@@ -1,169 +1,152 @@
-#Import libraries 
-import numpy as np
+#Import key libraries
+import psycopg2
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import stats
-from scipy.stats import pearsonr, spearmanr
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LassoCV
 
-print('='*25)
-print('Part 1: Data Preparation')
-print('='*25)
-
-#Load data
-pd_data_path = 'Downloads/parkinsons+telemonitoring/parkinsons_updrs.data'
-df = pd.read_csv(pd_data_path)
-print(f"Successful loading of data!")
-
-
-
-print("1.1. BASIC DATASET CHARACTERISTICS")
-print("Information about the data:")
-print('-'*28)
-print({df.info()})
-print(f"The shape of the data is: {df.shape}")
-print('-'*36)
-print(f"The number of records: {df.shape[0]}")
-print('-'*28)
-print(f"The number of features: {df.shape[1]}")
-print('-'*26)
-print(f"Stats about the columns:")
-print('-'*24)
-print(df.describe())
-print('\n')
-print("The first 5 rows of the dataset:")
-print('-'*34)
-print(df.head())
+conn = psycopg2.connect(
+    dbname="nyc_housing_analysis",
+    user="postgres",
+    password="Siddu@1903",
+    host="localhost",
+    port="5432"
+)
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT version();")
+    print("Connected successfully to:", cur.fetchone())
+except Exception as e:
+    print("Connection failed:", e)
 
 
+#Load all three tables
+violations_df = pd.read_sql("SELECT * FROM housing_violations;", conn)
+requests_df = pd.read_sql("SELECT * FROM service_requests_311;", conn)
+population_df = pd.read_sql("SELECT * FROM population_forecast;", conn)
+
+#Display first few rows of each
+print("Housing Violations:")
+display(violations_df.head())
+print("\nService Requests:")
+display(requests_df.head())
+print("\nPopulation Forecast:")
+display(population_df.head())
+
+print("Missing Values in Housing Violations:")
+print(violations_df.isnull().sum(), "\n")
+
+print("Missing Values in Service Requests:")
+print(requests_df.isnull().sum(), "\n")
+
+print("Missing Values in Population Forecast:")
+print(population_df.isnull().sum())
+
+#Housing Violations
+print("Housing Violations Shape:", violations_df.shape)
+
+#Service Requests
+print("Service Requests Shape:", requests_df.shape)
+
+#Population Forecast
+print("Population Forecast Shape:", population_df.shape)
+
+violations_df.dropna(subset=["postcode"], inplace=True)
+requests_df.dropna(subset=["incident_zip", "latitude", "longitude", "resolution"], inplace=True)
 
 
-print("1.2. CLEANING DATA: MISSING, NULL, NAN")
-missing_points = df.isnull().sum() #accounts for None/Null and NaN
+print("After Dropping Missing Values:")
+print("Housing Violations:", violations_df.shape)
+print("Service Requests:", requests_df.shape)
 
-missing_data = pd.DataFrame({
-    'Column': missing_points.index,
-    'Missing_Count': missing_points.values,
-})
+print("Housing Violations — Info:")
+print("\n Housing Violations — Summary Stats:")
+print(violations_df.describe(include='all'))
 
-print("Information about missing values:")
-print('-'*33)
-print(missing_data)
+print("\nService Requests — Info:")
+requests_df.info()
+print("\nService Requests — Summary Stats:")
+print(requests_df.describe(include='all'))
 
-if missing_points.sum() == 0: 
-    print("No missing values found in the dataset!")
-else: 
-    print(f"{missing_points.sum()} missing values found")
+print("\n Population Forecast — Info:")
+population_df.info()
+print("\n Population Forecast — Summary Stats:")
+print(population_df.describe(include='all'))
 
+#Check if there are any duplicate rows
+duplicates_housing = violations_df.duplicated().sum()
+print(f"Housing Violations — Total duplicate rows: {duplicates_housing}")
+#View the first few duplicates
+if duplicates_housing > 0:
+    print(violations_df[violations_df.duplicated()].head())
 
-#Infinite values check 
-infinity_cols = (np.isinf(df.select_dtypes(include=[np.number]))).any()
+duplicates_service = requests_df.duplicated().sum()
+print(f"Service Requests — Total duplicate rows: {duplicates_service}")
+if duplicates_service > 0:
+    print(requests_df[requests_df.duplicated()].head())
+#Remove duplicates if found
+requests_df.drop_duplicates(inplace=True)
+print(f"After removing duplicates: {requests_df.shape}")
 
-if not infinity_cols.any():
-    print("No infinite values found!")
-else:
-    print("Column with Infinite values:", list(inf_cols[inf_cols].index))
+duplicates_population = population_df.duplicated().sum()
+print(f"Population Forecast — Total duplicate rows: {duplicates_population}")
+if duplicates_population > 0:
+    print(population_df[population_df.duplicated()].head())
+#Remove duplicates if needed
+population_df.drop_duplicates(inplace=True)
+print(f"After removing duplicates: {population_df.shape}")
 
+print("Before conversion:")
+print(violations_df.dtypes)
+#Convert inspection_date → datetime
+violations_df['inspection_date'] = pd.to_datetime(
+    violations_df['inspection_date'], errors='coerce', format='%d-%m-%Y'
+)
+#Convert postcode → string (some ZIPs may look numeric)
+violations_df['postcode'] = violations_df['postcode'].astype(str)
+print("\nAfter conversion:")
+print(violations_df.dtypes)
 
+print("\nBefore conversion:")
+print(requests_df.dtypes)
+#Convert created_date → datetime
+requests_df['created_date'] = pd.to_datetime(
+    requests_df['created_date'], errors='coerce', format='%d-%m-%Y %H:%M'
+)
+#Ensure ZIP code is text, not number
+requests_df['incident_zip'] = requests_df['incident_zip'].astype(str)
+print("\nAfter conversion:")
+print(requests_df.dtypes)
 
-print("1.3. TRANSFORM DATA")
-#Find non-numeric columns
-non_numeric = df.select_dtypes(exclude=[np.number]).columns
-print("Non-numeric columns:", list(non_numeric))
+print("\nBefore conversion:")
+print(population_df.dtypes)
+# Make sure population columns are integers
+population_df[['population_2020', 'population_2030', 'population_2040']] = \
+population_df[['population_2020', 'population_2030', 'population_2040']].astype(int)
+print("\nAfter conversion:")
+print(population_df.dtypes)
 
-#Attempt to convert 
-for col in non_numeric:
-    df[col] = pd.to_numeric(df[col], errors='coerce')
-print("All necessary columns are numeric")
+#Check date range
+print(violations_df['inspection_date'].min(), violations_df['inspection_date'].max())
+#Filter if any wrong years appear (e.g., before 2010 or after 2025)
+violations_df = violations_df[
+    (violations_df['inspection_date'] >= '2010-01-01') &
+    (violations_df['inspection_date'] <= '2025-12-31')
+]
 
+#NYC roughly ranges between:
+#Latitude: 40.4 – 41.0, Longitude: -74.3 – -73.6
+invalid_coords = requests_df[
+    (requests_df['latitude'] < 40.4) | (requests_df['latitude'] > 41.0) |
+    (requests_df['longitude'] < -74.3) | (requests_df['longitude'] > -73.6)
+]
+print(f"Invalid coordinate rows: {len(invalid_coords)}")
+#Drop them
+requests_df = requests_df.drop(invalid_coords.index)
+print(f"After removing invalid coordinates: {requests_df.shape}")
 
-
-
-print("1.4. DATA ANALYSIS. LISTING TYPES")
-#Checking for 'subject#' column. Categorical, represents subjects.
-if 'subject#' in df.columns:
-    print(f"Number of unique subjects: {df['subject#'].nunique()}")
-    print(f"Subject IDs range: {df['subject#'].min()} to {df['subject#'].max()}") #Tells us if IDs are continuous
-
-print("\nData types of all columns:")
-print(df.dtypes)
-
-#Finding numeric vs categorical columns
-numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
-
-print(f"\nNumeric columns ({len(numeric_columns)}):")
-print(numeric_columns)
-
-print(f"\nCategorical columns ({len(categorical_columns)}):")
-print(categorical_columns)
-if len(categorical_columns) == 0: 
-    print("This confirms that all columns are numeric!")
-
-
-
-
-print("1.5. OUTLIER DETECTION")
-#Z-score Method: to identify outlier by SD from mean. For Normal distribution
-numeric_data = df.select_dtypes(include=[np.number]).drop(columns=['subject#'], errors='ignore') #Exclude non-numeric columns
-
-#Absolute Z-scores
-z_scores = np.abs(stats.zscore(numeric_data))
-outlier_counts = (z_scores > 3).sum(axis=0) #Count outliers per columnm thredhold of 3
-outlier_counts = pd.Series((z_scores > 3).sum(axis=0), index=numeric_data.columns)
-outlier_counts = outlier_counts[outlier_counts > 0] #Columns with outliers
-if outlier_counts[outlier_counts > 0].empty:
-    print("No Z-score outliers found.")
-else:
-    print("\nZ-score Outliers:")
-    print(outlier_counts[outlier_counts > 0].sort_values(ascending=False))
-
-#IQR Method: to identify outlier by spread of middle 50%. Non-normal distribution. For skewed data
-outlier_data = []
-for col in numeric_data.columns:
-    Q1 = numeric_data[col].quantile(0.25)
-    Q3 = numeric_data[col].quantile(0.75)
-    IQR = Q3 - Q1
-
-    lower = Q1 - 1.5 * IQR
-    upper = Q3 + 1.5 * IQR
-
-    count = ((numeric_data[col] < lower) | (numeric_data[col] > upper)).sum()
-    percent = (count / len(numeric_data)) * 100
-
-    if count > 0:
-        outlier_data.append([col, count, f"{percent:.2f}%", f"{lower:.2f}", f"{upper:.2f}"])
-
-
-#Outlier DataFrame
-if outlier_data:
-    outlier_df = pd.DataFrame(outlier_data, columns=[
-        'Feature', 'Outlier_Count', 'Outlier_Percentage', 'Lower_Bound', 'Upper_Bound'
-    ])
-    outlier_df = outlier_df.sort_values('Outlier_Count', ascending=False)
-
-    print("\nTop Features with IQR Outliers:")
-    print(outlier_df.head(10).to_string(index=False))
-else:
-    print("No IQR outliers found.")
-#Note: both methods were used for a comprehensive measure, to cover normal and non-normal distribution
-
-#Box Plots for Outlier Detection, outliers in features with most skewness
-outlier_features = ['Shimmer(dB)', 'Shimmer:APQ5', 'NHR', 'Jitter(%)', 'PPE', 'RPDE']
-fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-axes = axes.ravel()
-
-for idx, feature in enumerate(outlier_features):
-    axes[idx].boxplot(df[feature], vert=True, patch_artist=True,
-                     boxprops=dict(facecolor='lightblue', alpha=0.7),
-                     medianprops=dict(color='red', linewidth=2))
-    axes[idx].set_ylabel('Value')
-    axes[idx].set_title(feature)
-    axes[idx].grid(axis='y', alpha=0.3)
-
-plt.suptitle('Outlier Detection - Selected Features', fontsize=16, fontweight='bold')
-plt.tight_layout()
-plt.show()
+print(population_df.describe())
+#Sanity check
+outliers_pop = population_df[
+    (population_df['population_2020'] < 500000) | (population_df['population_2020'] > 10000000)
+]
+print(outliers_pop)
